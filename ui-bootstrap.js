@@ -675,7 +675,12 @@ angular.module('ui.bootstrap.carousel', [])
 
   var destroyed = false;
   /* direction: "prev" or "next" */
-  self.select = $scope.select = function(nextSlide, direction) {
+  self.select = $scope.select = function(nextSlide, direction, isFromTimer) {
+    // stop auto changing slides when the user interacts with the carousel
+    if (!isFromTimer && direction === 'next') {
+      $scope.interval = 0;
+    }
+
     var nextIndex = $scope.indexOfSlide(nextSlide);
     //Decide direction if it's not given
     if (direction === undefined) {
@@ -750,7 +755,7 @@ angular.module('ui.bootstrap.carousel', [])
     return angular.isDefined(slide.index) ? +slide.index : slides.indexOf(slide);
   };
 
-  $scope.next = function() {
+  $scope.next = function(isFromTimer) {
     var newIndex = (self.getCurrentIndex() + 1) % slides.length;
 
     if (newIndex === 0 && $scope.noWrap()) {
@@ -758,7 +763,7 @@ angular.module('ui.bootstrap.carousel', [])
       return;
     }
 
-    return self.select(getSlideByIndex(newIndex), 'next');
+    return self.select(getSlideByIndex(newIndex), 'next', isFromTimer);
   };
 
   $scope.prev = function() {
@@ -797,7 +802,7 @@ angular.module('ui.bootstrap.carousel', [])
   function timerFn() {
     var interval = +$scope.interval;
     if (isPlaying && !isNaN(interval) && interval > 0 && slides.length) {
-      $scope.next();
+      $scope.next(true);
     } else {
       $scope.pause();
     }
@@ -848,7 +853,7 @@ angular.module('ui.bootstrap.carousel', [])
     } else if (currentIndex > index) {
       currentIndex--;
     }
-    
+
     //clean the currentSlide when no more slide
     if (slides.length === 0) {
       self.currentSlide = null;
