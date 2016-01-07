@@ -2,60 +2,60 @@
  * angular-ui-bootstrap
  * http://angular-ui.github.io/bootstrap/
 
- * Version: 0.13.3 - 2015-08-09
+ * Version: 0.14.3 - 2015-10-23
  * License: MIT
  */
-angular.module("ui.bootstrap", ["ui.bootstrap.modal","ui.bootstrap.carousel"]);
-angular.module('ui.bootstrap.modal', [])
-
+angular.module("ui.bootstrap", ["ui.bootstrap.modal","ui.bootstrap.stackedMap"]);
+angular.module('ui.bootstrap.modal', ['ui.bootstrap.stackedMap'])
 /**
- * A helper, internal data structure that acts as a map but also allows getting / removing
- * elements in the LIFO order
+ * A helper, internal data structure that stores all references attached to key
  */
-  .factory('$$stackedMap', function () {
+  .factory('$$multiMap', function() {
     return {
-      createNew: function () {
-        var stack = [];
+      createNew: function() {
+        var map = {};
 
         return {
-          add: function (key, value) {
-            stack.push({
-              key: key,
-              value: value
+          entries: function() {
+            return Object.keys(map).map(function(key) {
+              return {
+                key: key,
+                value: map[key]
+              };
             });
           },
-          get: function (key) {
-            for (var i = 0; i < stack.length; i++) {
-              if (key == stack[i].key) {
-                return stack[i];
-              }
-            }
+          get: function(key) {
+            return map[key];
+          },
+          hasKey: function(key) {
+            return !!map[key];
           },
           keys: function() {
-            var keys = [];
-            for (var i = 0; i < stack.length; i++) {
-              keys.push(stack[i].key);
+            return Object.keys(map);
+          },
+          put: function(key, value) {
+            if (!map[key]) {
+              map[key] = [];
             }
-            return keys;
+
+            map[key].push(value);
           },
-          top: function () {
-            return stack[stack.length - 1];
-          },
-          remove: function (key) {
-            var idx = -1;
-            for (var i = 0; i < stack.length; i++) {
-              if (key == stack[i].key) {
-                idx = i;
-                break;
-              }
+          remove: function(key, value) {
+            var values = map[key];
+
+            if (!values) {
+              return;
             }
-            return stack.splice(idx, 1)[0];
-          },
-          removeTop: function () {
-            return stack.splice(stack.length - 1, 1)[0];
-          },
-          length: function () {
-            return stack.length;
+
+            var idx = values.indexOf(value);
+
+            if (idx !== -1) {
+              values.splice(idx, 1);
+            }
+
+            if (!values.length) {
+              delete map[key];
+            }
           }
         };
       }
@@ -65,9 +65,9 @@ angular.module('ui.bootstrap.modal', [])
 /**
  * A helper directive for the $modal service. It creates a backdrop element.
  */
-  .directive('modalBackdrop', [
-           '$animate', '$injector', '$modalStack',
-  function ($animate ,  $injector,   $modalStack) {
+  .directive('uibModalBackdrop', [
+           '$animate', '$injector', '$uibModalStack',
+  function($animate ,  $injector,   $modalStack) {
     var $animateCss = null;
 
     if ($injector.has('$animateCss')) {
@@ -75,16 +75,18 @@ angular.module('ui.bootstrap.modal', [])
     }
 
     return {
-      restrict: 'EA',
       replace: true,
       templateUrl: 'template/modal/backdrop.html',
-      compile: function (tElement, tAttrs) {
+      compile: function(tElement, tAttrs) {
         tElement.addClass(tAttrs.backdropClass);
         return linkFn;
       }
     };
 
     function linkFn(scope, element, attrs) {
+      // Temporary fix for prefixing
+      element.addClass('modal-backdrop');
+
       if (attrs.modalInClass) {
         if ($animateCss) {
           $animateCss(element, {
@@ -94,7 +96,7 @@ angular.module('ui.bootstrap.modal', [])
           $animate.addClass(element, attrs.modalInClass);
         }
 
-        scope.$on($modalStack.NOW_CLOSING_EVENT, function (e, setIsAsync) {
+        scope.$on($modalStack.NOW_CLOSING_EVENT, function(e, setIsAsync) {
           var done = setIsAsync();
           if ($animateCss) {
             $animateCss(element, {
@@ -108,9 +110,9 @@ angular.module('ui.bootstrap.modal', [])
     }
   }])
 
-  .directive('modalWindow', [
-           '$modalStack', '$q', '$animate', '$injector',
-  function ($modalStack ,  $q ,  $animate,   $injector) {
+  .directive('uibModalWindow', [
+           '$uibModalStack', '$q', '$animate', '$injector',
+  function($modalStack ,  $q ,  $animate,   $injector) {
     var $animateCss = null;
 
     if ($injector.has('$animateCss')) {
@@ -118,7 +120,6 @@ angular.module('ui.bootstrap.modal', [])
     }
 
     return {
-      restrict: 'EA',
       scope: {
         index: '@'
       },
@@ -127,18 +128,22 @@ angular.module('ui.bootstrap.modal', [])
       templateUrl: function(tElement, tAttrs) {
         return tAttrs.templateUrl || 'template/modal/window.html';
       },
-      link: function (scope, element, attrs) {
+      link: function(scope, element, attrs) {
         element.addClass(attrs.windowClass || '');
+        element.addClass(attrs.windowTopClass || '');
         scope.size = attrs.size;
 
-        scope.close = function (evt) {
+        scope.close = function(evt) {
           var modal = $modalStack.getTop();
-          if (modal && modal.value.backdrop && modal.value.backdrop != 'static' && (evt.target === evt.currentTarget)) {
+          if (modal && modal.value.backdrop && modal.value.backdrop !== 'static' && (evt.target === evt.currentTarget)) {
             evt.preventDefault();
             evt.stopPropagation();
             $modalStack.dismiss(modal.key, 'backdrop click');
           }
         };
+
+        // moved from template to fix issue #2280
+        element.on('click', scope.close);
 
         // This property is only added to the scope for the purpose of detecting when this directive is rendered.
         // We can detect that by using this property in the template associated with this directive and then use
@@ -149,23 +154,25 @@ angular.module('ui.bootstrap.modal', [])
         var modalRenderDeferObj = $q.defer();
         // Observe function will be called on next digest cycle after compilation, ensuring that the DOM is ready.
         // In order to use this way of finding whether DOM is ready, we need to observe a scope property used in modal's template.
-        attrs.$observe('modalRender', function (value) {
+        attrs.$observe('modalRender', function(value) {
           if (value == 'true') {
             modalRenderDeferObj.resolve();
           }
         });
 
-        modalRenderDeferObj.promise.then(function () {
+        modalRenderDeferObj.promise.then(function() {
+          var animationPromise = null;
+
           if (attrs.modalInClass) {
             if ($animateCss) {
-              $animateCss(element, {
+              animationPromise = $animateCss(element, {
                 addClass: attrs.modalInClass
               }).start();
             } else {
-              $animate.addClass(element, attrs.modalInClass);
+              animationPromise = $animate.addClass(element, attrs.modalInClass);
             }
 
-            scope.$on($modalStack.NOW_CLOSING_EVENT, function (e, setIsAsync) {
+            scope.$on($modalStack.NOW_CLOSING_EVENT, function(e, setIsAsync) {
               var done = setIsAsync();
               if ($animateCss) {
                 $animateCss(element, {
@@ -177,20 +184,23 @@ angular.module('ui.bootstrap.modal', [])
             });
           }
 
-          var inputsWithAutofocus = element[0].querySelectorAll('[autofocus]');
-          /**
-           * Auto-focusing of a freshly-opened modal element causes any child elements
-           * with the autofocus attribute to lose focus. This is an issue on touch
-           * based devices which will show and then hide the onscreen keyboard.
-           * Attempts to refocus the autofocus element via JavaScript will not reopen
-           * the onscreen keyboard. Fixed by updated the focusing logic to only autofocus
-           * the modal element if the modal does not contain an autofocus element.
-           */
-          if (inputsWithAutofocus.length) {
-            inputsWithAutofocus[0].focus();
-          } else {
-            element[0].focus();
-          }
+
+          $q.when(animationPromise).then(function() {
+            var inputWithAutofocus = element[0].querySelector('[autofocus]');
+            /**
+             * Auto-focusing of a freshly-opened modal element causes any child elements
+             * with the autofocus attribute to lose focus. This is an issue on touch
+             * based devices which will show and then hide the onscreen keyboard.
+             * Attempts to refocus the autofocus element via JavaScript will not reopen
+             * the onscreen keyboard. Fixed by updated the focusing logic to only autofocus
+             * the modal element if the modal does not contain an autofocus element.
+             */
+            if (inputWithAutofocus) {
+              inputWithAutofocus.focus();
+            } else {
+              element[0].focus();
+            }
+          });
 
           // Notify {@link $modalStack} that modal is rendered.
           var modal = $modalStack.getTop();
@@ -202,18 +212,17 @@ angular.module('ui.bootstrap.modal', [])
     };
   }])
 
-  .directive('modalAnimationClass', [
-    function () {
-      return {
-        compile: function (tElement, tAttrs) {
-          if (tAttrs.modalAnimation) {
-            tElement.addClass(tAttrs.modalAnimationClass);
-          }
+  .directive('uibModalAnimationClass', function() {
+    return {
+      compile: function(tElement, tAttrs) {
+        if (tAttrs.modalAnimation) {
+          tElement.addClass(tAttrs.uibModalAnimationClass);
         }
-      };
-    }])
+      }
+    };
+  })
 
-  .directive('modalTransclude', function () {
+  .directive('uibModalTransclude', function() {
     return {
       link: function($scope, $element, $attrs, controller, $transclude) {
         $transclude($scope.$parent, function(clone) {
@@ -224,14 +233,16 @@ angular.module('ui.bootstrap.modal', [])
     };
   })
 
-  .factory('$modalStack', [
+  .factory('$uibModalStack', [
              '$animate', '$timeout', '$document', '$compile', '$rootScope',
              '$q',
              '$injector',
+             '$$multiMap',
              '$$stackedMap',
-    function ($animate ,  $timeout ,  $document ,  $compile ,  $rootScope ,
+    function($animate ,  $timeout ,  $document ,  $compile ,  $rootScope ,
               $q,
               $injector,
+              $$multiMap,
               $$stackedMap) {
       var $animateCss = null;
 
@@ -243,6 +254,7 @@ angular.module('ui.bootstrap.modal', [])
 
       var backdropDomEl, backdropScope;
       var openedWindows = $$stackedMap.createNew();
+      var openedClasses = $$multiMap.createNew();
       var $modalStack = {
         NOW_CLOSING_EVENT: 'modal.stack.now-closing'
       };
@@ -272,7 +284,6 @@ angular.module('ui.bootstrap.modal', [])
       });
 
       function removeModalWindow(modalInstance, elementToReceiveFocus) {
-
         var body = $document.find('body').eq(0);
         var modalWindow = openedWindows.get(modalInstance).value;
 
@@ -280,7 +291,10 @@ angular.module('ui.bootstrap.modal', [])
         openedWindows.remove(modalInstance);
 
         removeAfterAnimate(modalWindow.modalDomEl, modalWindow.modalScope, function() {
-          body.toggleClass(modalInstance.openedClass || OPENED_MODAL_CLASS, openedWindows.length() > 0);
+          var modalBodyClass = modalWindow.openedClass || OPENED_MODAL_CLASS;
+          openedClasses.remove(modalBodyClass, modalInstance);
+          body.toggleClass(modalBodyClass, openedClasses.hasKey(modalBodyClass));
+          toggleTopWindowClass(true);
         });
         checkRemoveBackdrop();
 
@@ -292,22 +306,32 @@ angular.module('ui.bootstrap.modal', [])
         }
       }
 
+      // Add or remove "windowTopClass" from the top window in the stack
+      function toggleTopWindowClass(toggleSwitch) {
+        var modalWindow;
+
+        if (openedWindows.length() > 0) {
+          modalWindow = openedWindows.top().value;
+          modalWindow.modalDomEl.toggleClass(modalWindow.windowTopClass || '', toggleSwitch);
+        }
+      }
+
       function checkRemoveBackdrop() {
-          //remove backdrop if no longer needed
-          if (backdropDomEl && backdropIndex() == -1) {
-            var backdropScopeRef = backdropScope;
-            removeAfterAnimate(backdropDomEl, backdropScope, function () {
-              backdropScopeRef = null;
-            });
-            backdropDomEl = undefined;
-            backdropScope = undefined;
-          }
+        //remove backdrop if no longer needed
+        if (backdropDomEl && backdropIndex() == -1) {
+          var backdropScopeRef = backdropScope;
+          removeAfterAnimate(backdropDomEl, backdropScope, function() {
+            backdropScopeRef = null;
+          });
+          backdropDomEl = undefined;
+          backdropScope = undefined;
+        }
       }
 
       function removeAfterAnimate(domEl, scope, done) {
         var asyncDeferred;
         var asyncPromise = null;
-        var setIsAsync = function () {
+        var setIsAsync = function() {
           if (!asyncDeferred) {
             asyncDeferred = $q.defer();
             asyncPromise = asyncDeferred.promise;
@@ -346,17 +370,17 @@ angular.module('ui.bootstrap.modal', [])
         }
       }
 
-      $document.bind('keydown', function (evt) {
+      $document.bind('keydown', function(evt) {
         if (evt.isDefaultPrevented()) {
           return evt;
         }
 
         var modal = openedWindows.top();
         if (modal && modal.value.keyboard) {
-          switch (evt.which){
+          switch (evt.which) {
             case 27: {
               evt.preventDefault();
-              $rootScope.$apply(function () {
+              $rootScope.$apply(function() {
                 $modalStack.dismiss(modal.key, 'escape key press');
               });
               break;
@@ -384,9 +408,11 @@ angular.module('ui.bootstrap.modal', [])
         }
       });
 
-      $modalStack.open = function (modalInstance, modal) {
+      $modalStack.open = function(modalInstance, modal) {
+        var modalOpener = $document[0].activeElement,
+          modalBodyClass = modal.openedClass || OPENED_MODAL_CLASS;
 
-        var modalOpener = $document[0].activeElement;
+        toggleTopWindowClass(false);
 
         openedWindows.add(modalInstance, {
           deferred: modal.deferred,
@@ -394,8 +420,11 @@ angular.module('ui.bootstrap.modal', [])
           modalScope: modal.scope,
           backdrop: modal.backdrop,
           keyboard: modal.keyboard,
-          openedClass: modal.openedClass
+          openedClass: modal.openedClass,
+          windowTopClass: modal.windowTopClass
         });
+
+        openedClasses.put(modalBodyClass, modalInstance);
 
         var body = $document.find('body').eq(0),
             currBackdropIndex = backdropIndex();
@@ -403,7 +432,7 @@ angular.module('ui.bootstrap.modal', [])
         if (currBackdropIndex >= 0 && !backdropDomEl) {
           backdropScope = $rootScope.$new(true);
           backdropScope.index = currBackdropIndex;
-          var angularBackgroundDomEl = angular.element('<div modal-backdrop="modal-backdrop"></div>');
+          var angularBackgroundDomEl = angular.element('<div uib-modal-backdrop="modal-backdrop"></div>');
           angularBackgroundDomEl.attr('backdrop-class', modal.backdropClass);
           if (modal.animation) {
             angularBackgroundDomEl.attr('modal-animation', 'true');
@@ -412,10 +441,11 @@ angular.module('ui.bootstrap.modal', [])
           body.append(backdropDomEl);
         }
 
-        var angularDomEl = angular.element('<div modal-window="modal-window"></div>');
+        var angularDomEl = angular.element('<div uib-modal-window="modal-window"></div>');
         angularDomEl.attr({
           'template-url': modal.windowTemplateUrl,
           'window-class': modal.windowClass,
+          'window-top-class': modal.windowTopClass,
           'size': modal.size,
           'index': openedWindows.length() - 1,
           'animate': 'animate'
@@ -428,15 +458,16 @@ angular.module('ui.bootstrap.modal', [])
         openedWindows.top().value.modalDomEl = modalDomEl;
         openedWindows.top().value.modalOpener = modalOpener;
         body.append(modalDomEl);
-        body.addClass(modal.openedClass || OPENED_MODAL_CLASS);
+        body.addClass(modalBodyClass);
+
         $modalStack.clearFocusListCache();
       };
 
       function broadcastClosing(modalWindow, resultOrReason, closing) {
-          return !modalWindow.value.modalScope.$broadcast('modal.closing', resultOrReason, closing).defaultPrevented;
+        return !modalWindow.value.modalScope.$broadcast('modal.closing', resultOrReason, closing).defaultPrevented;
       }
 
-      $modalStack.close = function (modalInstance, result) {
+      $modalStack.close = function(modalInstance, result) {
         var modalWindow = openedWindows.get(modalInstance);
         if (modalWindow && broadcastClosing(modalWindow, result, true)) {
           modalWindow.value.modalScope.$$uibDestructionScheduled = true;
@@ -447,7 +478,7 @@ angular.module('ui.bootstrap.modal', [])
         return !modalWindow;
       };
 
-      $modalStack.dismiss = function (modalInstance, reason) {
+      $modalStack.dismiss = function(modalInstance, reason) {
         var modalWindow = openedWindows.get(modalInstance);
         if (modalWindow && broadcastClosing(modalWindow, reason, false)) {
           modalWindow.value.modalScope.$$uibDestructionScheduled = true;
@@ -458,18 +489,18 @@ angular.module('ui.bootstrap.modal', [])
         return !modalWindow;
       };
 
-      $modalStack.dismissAll = function (reason) {
+      $modalStack.dismissAll = function(reason) {
         var topModal = this.getTop();
         while (topModal && this.dismiss(topModal.key, reason)) {
           topModal = this.getTop();
         }
       };
 
-      $modalStack.getTop = function () {
+      $modalStack.getTop = function() {
         return openedWindows.top();
       };
 
-      $modalStack.modalRendered = function (modalInstance) {
+      $modalStack.modalRendered = function(modalInstance) {
         var modalWindow = openedWindows.get(modalInstance);
         if (modalWindow) {
           modalWindow.value.renderDeferred.resolve();
@@ -511,7 +542,7 @@ angular.module('ui.bootstrap.modal', [])
       };
 
       $modalStack.loadFocusElementList = function(modalWindow) {
-        if (focusableElementList === undefined || !focusableElementList.length0) {
+        if (focusableElementList === undefined || !focusableElementList.length) {
           if (modalWindow) {
             var modalDomE1 = modalWindow.value.modalDomEl;
             if (modalDomE1 && modalDomE1.length) {
@@ -524,17 +555,15 @@ angular.module('ui.bootstrap.modal', [])
       return $modalStack;
     }])
 
-  .provider('$modal', function () {
-
+  .provider('$uibModal', function() {
     var $modalProvider = {
       options: {
         animation: true,
         backdrop: true, //can also be false or 'static'
         keyboard: true
       },
-      $get: ['$injector', '$rootScope', '$q', '$templateRequest', '$controller', '$modalStack',
-        function ($injector, $rootScope, $q, $templateRequest, $controller, $modalStack) {
-
+      $get: ['$injector', '$rootScope', '$q', '$templateRequest', '$controller', '$uibModalStack', '$modalSuppressWarning', '$log',
+        function ($injector, $rootScope, $q, $templateRequest, $controller, $modalStack, $modalSuppressWarning, $log) {
           var $modal = {};
 
           function getTemplatePromise(options) {
@@ -544,18 +573,24 @@ angular.module('ui.bootstrap.modal', [])
 
           function getResolvePromises(resolves) {
             var promisesArr = [];
-            angular.forEach(resolves, function (value) {
+            angular.forEach(resolves, function(value) {
               if (angular.isFunction(value) || angular.isArray(value)) {
                 promisesArr.push($q.when($injector.invoke(value)));
               } else if (angular.isString(value)) {
                 promisesArr.push($q.when($injector.get(value)));
+              } else {
+                promisesArr.push($q.when(value));
               }
             });
             return promisesArr;
           }
 
-          $modal.open = function (modalOptions) {
+          var promiseChain = null;
+          $modal.getPromiseChain = function() {
+            return promiseChain;
+          };
 
+          $modal.open = function(modalOptions) {
             var modalResultDeferred = $q.defer();
             var modalOpenedDeferred = $q.defer();
             var modalRenderDeferred = $q.defer();
@@ -585,496 +620,377 @@ angular.module('ui.bootstrap.modal', [])
             var templateAndResolvePromise =
               $q.all([getTemplatePromise(modalOptions)].concat(getResolvePromises(modalOptions.resolve)));
 
+            function resolveWithTemplate() {
+              return templateAndResolvePromise;
+            }
 
-            templateAndResolvePromise.then(function resolveSuccess(tplAndVars) {
+            // Wait for the resolution of the existing promise chain.
+            // Then switch to our own combined promise dependency (regardless of how the previous modal fared).
+            // Then add to $modalStack and resolve opened.
+            // Finally clean up the chain variable if no subsequent modal has overwritten it.
+            var samePromise;
+            samePromise = promiseChain = $q.all([promiseChain])
+              .then(resolveWithTemplate, resolveWithTemplate)
+              .then(function resolveSuccess(tplAndVars) {
 
-              var modalScope = (modalOptions.scope || $rootScope).$new();
-              modalScope.$close = modalInstance.close;
-              modalScope.$dismiss = modalInstance.dismiss;
+                var modalScope = (modalOptions.scope || $rootScope).$new();
+                modalScope.$close = modalInstance.close;
+                modalScope.$dismiss = modalInstance.dismiss;
 
-              modalScope.$on('$destroy', function() {
-                if (!modalScope.$$uibDestructionScheduled) {
-                  modalScope.$dismiss('$uibUnscheduledDestruction');
-                }
-              });
-
-              var ctrlInstance, ctrlLocals = {};
-              var resolveIter = 1;
-
-              //controllers
-              if (modalOptions.controller) {
-                ctrlLocals.$scope = modalScope;
-                ctrlLocals.$modalInstance = modalInstance;
-                angular.forEach(modalOptions.resolve, function (value, key) {
-                  ctrlLocals[key] = tplAndVars[resolveIter++];
+                modalScope.$on('$destroy', function() {
+                  if (!modalScope.$$uibDestructionScheduled) {
+                    modalScope.$dismiss('$uibUnscheduledDestruction');
+                  }
                 });
 
-                ctrlInstance = $controller(modalOptions.controller, ctrlLocals);
-                if (modalOptions.controllerAs) {
-                  if (modalOptions.bindToController) {
-                    angular.extend(ctrlInstance, modalScope);
+                var ctrlInstance, ctrlLocals = {};
+                var resolveIter = 1;
+
+                //controllers
+                if (modalOptions.controller) {
+                  ctrlLocals.$scope = modalScope;
+                  ctrlLocals.$uibModalInstance = modalInstance;
+                  Object.defineProperty(ctrlLocals, '$modalInstance', {
+                    get: function() {
+                      if (!$modalSuppressWarning) {
+                        $log.warn('$modalInstance is now deprecated. Use $uibModalInstance instead.');
+                      }
+
+                      return modalInstance;
+                    }
+                  });
+                  angular.forEach(modalOptions.resolve, function(value, key) {
+                    ctrlLocals[key] = tplAndVars[resolveIter++];
+                  });
+
+                  ctrlInstance = $controller(modalOptions.controller, ctrlLocals);
+                  if (modalOptions.controllerAs) {
+                    if (modalOptions.bindToController) {
+                      angular.extend(ctrlInstance, modalScope);
+                    }
+
+                    modalScope[modalOptions.controllerAs] = ctrlInstance;
                   }
-
-                  modalScope[modalOptions.controllerAs] = ctrlInstance;
                 }
-              }
 
-              $modalStack.open(modalInstance, {
-                scope: modalScope,
-                deferred: modalResultDeferred,
-                renderDeferred: modalRenderDeferred,
-                content: tplAndVars[0],
-                animation: modalOptions.animation,
-                backdrop: modalOptions.backdrop,
-                keyboard: modalOptions.keyboard,
-                backdropClass: modalOptions.backdropClass,
-                windowClass: modalOptions.windowClass,
-                windowTemplateUrl: modalOptions.windowTemplateUrl,
-                size: modalOptions.size,
-                openedClass: modalOptions.openedClass
-              });
+                $modalStack.open(modalInstance, {
+                  scope: modalScope,
+                  deferred: modalResultDeferred,
+                  renderDeferred: modalRenderDeferred,
+                  content: tplAndVars[0],
+                  animation: modalOptions.animation,
+                  backdrop: modalOptions.backdrop,
+                  keyboard: modalOptions.keyboard,
+                  backdropClass: modalOptions.backdropClass,
+                  windowTopClass: modalOptions.windowTopClass,
+                  windowClass: modalOptions.windowClass,
+                  windowTemplateUrl: modalOptions.windowTemplateUrl,
+                  size: modalOptions.size,
+                  openedClass: modalOptions.openedClass
+                });
+                modalOpenedDeferred.resolve(true);
 
             }, function resolveError(reason) {
-              modalResultDeferred.reject(reason);
-            });
-
-            templateAndResolvePromise.then(function () {
-              modalOpenedDeferred.resolve(true);
-            }, function (reason) {
               modalOpenedDeferred.reject(reason);
+              modalResultDeferred.reject(reason);
+            })
+            .finally(function() {
+              if (promiseChain === samePromise) {
+                promiseChain = null;
+              }
             });
 
             return modalInstance;
           };
 
           return $modal;
-        }]
+        }
+      ]
     };
 
     return $modalProvider;
   });
 
-/**
-* @ngdoc overview
-* @name ui.bootstrap.carousel
-*
-* @description
-* AngularJS version of an image carousel.
-*
-*/
-angular.module('ui.bootstrap.carousel', [])
-.controller('CarouselController', ['$scope', '$element', '$interval', '$animate', function ($scope, $element, $interval, $animate) {
-  var self = this,
-    slides = self.slides = $scope.slides = [],
-    NEW_ANIMATE = angular.version.minor >= 4,
-    NO_TRANSITION = 'uib-noTransition',
-    SLIDE_DIRECTION = 'uib-slideDirection',
-    currentIndex = -1,
-    currentInterval, isPlaying;
-  self.currentSlide = null;
+/* deprecated modal below */
 
-  var destroyed = false;
-  /* direction: "prev" or "next" */
-  self.select = $scope.select = function(nextSlide, direction, isFromTimer) {
-    // stop auto changing slides when the user interacts with the carousel
-    if (!isFromTimer && direction === 'next') {
-      $scope.interval = 0;
-    }
+angular.module('ui.bootstrap.modal')
 
-    var nextIndex = $scope.indexOfSlide(nextSlide);
-    //Decide direction if it's not given
-    if (direction === undefined) {
-      direction = nextIndex > self.getCurrentIndex() ? 'next' : 'prev';
-    }
-    //Prevent this user-triggered transition from occurring if there is already one in progress
-    if (nextSlide && nextSlide !== self.currentSlide && !$scope.$currentTransition) {
-      goNext(nextSlide, nextIndex, direction);
-    }
-  };
+  .value('$modalSuppressWarning', false)
 
-  function goNext(slide, index, direction) {
-    // Scope has been destroyed, stop here.
-    if (destroyed) { return; }
+  /**
+   * A helper directive for the $modal service. It creates a backdrop element.
+   */
+  .directive('modalBackdrop', [
+    '$animate', '$injector', '$modalStack', '$log', '$modalSuppressWarning',
+    function($animate ,  $injector,   $modalStack, $log, $modalSuppressWarning) {
+      var $animateCss = null;
 
-    angular.extend(slide, {direction: direction, active: true});
-    angular.extend(self.currentSlide || {}, {direction: direction, active: false});
-    if ($animate.enabled() && !$scope.noTransition && !$scope.$currentTransition &&
-      slide.$element && self.slides.length > 1) {
-      slide.$element.data(SLIDE_DIRECTION, slide.direction);
-      if (self.currentSlide && self.currentSlide.$element) {
-        self.currentSlide.$element.data(SLIDE_DIRECTION, slide.direction);
+      if ($injector.has('$animateCss')) {
+        $animateCss = $injector.get('$animateCss');
       }
 
-      $scope.$currentTransition = true;
-      if (NEW_ANIMATE) {
-        $animate.on('addClass', slide.$element, function (element, phase) {
-          if (phase === 'close') {
-            $scope.$currentTransition = null;
-            $animate.off('addClass', element);
+      return {
+        replace: true,
+        templateUrl: 'template/modal/backdrop.html',
+        compile: function(tElement, tAttrs) {
+          tElement.addClass(tAttrs.backdropClass);
+          return linkFn;
+        }
+      };
+
+      function linkFn(scope, element, attrs) {
+        if (!$modalSuppressWarning) {
+          $log.warn('modal-backdrop is now deprecated. Use uib-modal-backdrop instead.');
+        }
+        element.addClass('modal-backdrop');
+
+        if (attrs.modalInClass) {
+          if ($animateCss) {
+            $animateCss(element, {
+              addClass: attrs.modalInClass
+            }).start();
+          } else {
+            $animate.addClass(element, attrs.modalInClass);
           }
+
+          scope.$on($modalStack.NOW_CLOSING_EVENT, function(e, setIsAsync) {
+            var done = setIsAsync();
+            if ($animateCss) {
+              $animateCss(element, {
+                removeClass: attrs.modalInClass
+              }).start().then(done);
+            } else {
+              $animate.removeClass(element, attrs.modalInClass).then(done);
+            }
+          });
+        }
+      }
+    }])
+
+  .directive('modalWindow', [
+    '$modalStack', '$q', '$animate', '$injector', '$log', '$modalSuppressWarning',
+    function($modalStack ,  $q ,  $animate,   $injector, $log, $modalSuppressWarning) {
+      var $animateCss = null;
+
+      if ($injector.has('$animateCss')) {
+        $animateCss = $injector.get('$animateCss');
+      }
+
+      return {
+        scope: {
+          index: '@'
+        },
+        replace: true,
+        transclude: true,
+        templateUrl: function(tElement, tAttrs) {
+          return tAttrs.templateUrl || 'template/modal/window.html';
+        },
+        link: function(scope, element, attrs) {
+          if (!$modalSuppressWarning) {
+            $log.warn('modal-window is now deprecated. Use uib-modal-window instead.');
+          }
+          element.addClass(attrs.windowClass || '');
+          element.addClass(attrs.windowTopClass || '');
+          scope.size = attrs.size;
+
+          scope.close = function(evt) {
+            var modal = $modalStack.getTop();
+            if (modal && modal.value.backdrop && modal.value.backdrop !== 'static' && (evt.target === evt.currentTarget)) {
+              evt.preventDefault();
+              evt.stopPropagation();
+              $modalStack.dismiss(modal.key, 'backdrop click');
+            }
+          };
+
+          // moved from template to fix issue #2280
+          element.on('click', scope.close);
+
+          // This property is only added to the scope for the purpose of detecting when this directive is rendered.
+          // We can detect that by using this property in the template associated with this directive and then use
+          // {@link Attribute#$observe} on it. For more details please see {@link TableColumnResize}.
+          scope.$isRendered = true;
+
+          // Deferred object that will be resolved when this modal is render.
+          var modalRenderDeferObj = $q.defer();
+          // Observe function will be called on next digest cycle after compilation, ensuring that the DOM is ready.
+          // In order to use this way of finding whether DOM is ready, we need to observe a scope property used in modal's template.
+          attrs.$observe('modalRender', function(value) {
+            if (value == 'true') {
+              modalRenderDeferObj.resolve();
+            }
+          });
+
+          modalRenderDeferObj.promise.then(function() {
+            var animationPromise = null;
+
+            if (attrs.modalInClass) {
+              if ($animateCss) {
+                animationPromise = $animateCss(element, {
+                  addClass: attrs.modalInClass
+                }).start();
+              } else {
+                animationPromise = $animate.addClass(element, attrs.modalInClass);
+              }
+
+              scope.$on($modalStack.NOW_CLOSING_EVENT, function(e, setIsAsync) {
+                var done = setIsAsync();
+                if ($animateCss) {
+                  $animateCss(element, {
+                    removeClass: attrs.modalInClass
+                  }).start().then(done);
+                } else {
+                  $animate.removeClass(element, attrs.modalInClass).then(done);
+                }
+              });
+            }
+
+
+            $q.when(animationPromise).then(function() {
+              var inputWithAutofocus = element[0].querySelector('[autofocus]');
+              /**
+               * Auto-focusing of a freshly-opened modal element causes any child elements
+               * with the autofocus attribute to lose focus. This is an issue on touch
+               * based devices which will show and then hide the onscreen keyboard.
+               * Attempts to refocus the autofocus element via JavaScript will not reopen
+               * the onscreen keyboard. Fixed by updated the focusing logic to only autofocus
+               * the modal element if the modal does not contain an autofocus element.
+               */
+              if (inputWithAutofocus) {
+                inputWithAutofocus.focus();
+              } else {
+                element[0].focus();
+              }
+            });
+
+            // Notify {@link $modalStack} that modal is rendered.
+            var modal = $modalStack.getTop();
+            if (modal) {
+              $modalStack.modalRendered(modal.key);
+            }
+          });
+        }
+      };
+    }])
+
+  .directive('modalAnimationClass', [
+    '$log', '$modalSuppressWarning',
+    function ($log, $modalSuppressWarning) {
+      return {
+        compile: function(tElement, tAttrs) {
+          if (!$modalSuppressWarning) {
+            $log.warn('modal-animation-class is now deprecated. Use uib-modal-animation-class instead.');
+          }
+          if (tAttrs.modalAnimation) {
+            tElement.addClass(tAttrs.modalAnimationClass);
+          }
+        }
+      };
+    }])
+
+  .directive('modalTransclude', [
+    '$log', '$modalSuppressWarning',
+    function ($log, $modalSuppressWarning) {
+    return {
+      link: function($scope, $element, $attrs, controller, $transclude) {
+        if (!$modalSuppressWarning) {
+          $log.warn('modal-transclude is now deprecated. Use uib-modal-transclude instead.');
+        }
+        $transclude($scope.$parent, function(clone) {
+          $element.empty();
+          $element.append(clone);
         });
-      } else {
-        slide.$element.one('$animate:close', function closeFn() {
-          $scope.$currentTransition = null;
-        });
       }
-    }
+    };
+  }])
 
-    self.currentSlide = slide;
-    currentIndex = index;
-
-    //every time you change slides, reset the timer
-    restartTimer();
-  }
-
-  $scope.$on('$destroy', function () {
-    destroyed = true;
-  });
-
-  function getSlideByIndex(index) {
-    if (angular.isUndefined(slides[index].index)) {
-      return slides[index];
-    }
-    var i, len = slides.length;
-    for (i = 0; i < slides.length; ++i) {
-      if (slides[i].index == index) {
-        return slides[i];
+  .service('$modalStack', [
+    '$animate', '$timeout', '$document', '$compile', '$rootScope',
+    '$q',
+    '$injector',
+    '$$multiMap',
+    '$$stackedMap',
+    '$uibModalStack',
+    '$log',
+    '$modalSuppressWarning',
+    function($animate ,  $timeout ,  $document ,  $compile ,  $rootScope ,
+             $q,
+             $injector,
+             $$multiMap,
+             $$stackedMap,
+             $uibModalStack,
+             $log,
+             $modalSuppressWarning) {
+      if (!$modalSuppressWarning) {
+        $log.warn('$modalStack is now deprecated. Use $uibModalStack instead.');
       }
-    }
-  }
 
-  self.getCurrentIndex = function() {
-    if (self.currentSlide && angular.isDefined(self.currentSlide.index)) {
-      return +self.currentSlide.index;
-    }
-    return currentIndex;
-  };
+      angular.extend(this, $uibModalStack);
+    }])
 
-  /* Allow outside people to call indexOf on slides array */
-  $scope.indexOfSlide = function(slide) {
-    return angular.isDefined(slide.index) ? +slide.index : slides.indexOf(slide);
-  };
+  .provider('$modal', ['$uibModalProvider', function($uibModalProvider) {
+    angular.extend(this, $uibModalProvider);
 
-  $scope.next = function(isFromTimer) {
-    var newIndex = (self.getCurrentIndex() + 1) % slides.length;
+    this.$get = ['$injector', '$log', '$modalSuppressWarning',
+      function ($injector, $log, $modalSuppressWarning) {
+        if (!$modalSuppressWarning) {
+          $log.warn('$modal is now deprecated. Use $uibModal instead.');
+        }
 
-    if (newIndex === 0 && $scope.noWrap()) {
-      $scope.pause();
-      return;
-    }
+        return $injector.invoke($uibModalProvider.$get);
+      }];
+  }]);
 
-    return self.select(getSlideByIndex(newIndex), 'next', isFromTimer);
-  };
-
-  $scope.prev = function() {
-    var newIndex = self.getCurrentIndex() - 1 < 0 ? slides.length - 1 : self.getCurrentIndex() - 1;
-
-    if ($scope.noWrap() && newIndex === slides.length - 1){
-      $scope.pause();
-      return;
-    }
-
-    return self.select(getSlideByIndex(newIndex), 'prev');
-  };
-
-  $scope.isActive = function(slide) {
-     return self.currentSlide === slide;
-  };
-
-  $scope.$watch('interval', restartTimer);
-  $scope.$on('$destroy', resetTimer);
-
-  function restartTimer() {
-    resetTimer();
-    var interval = +$scope.interval;
-    if (!isNaN(interval) && interval > 0) {
-      currentInterval = $interval(timerFn, interval);
-    }
-  }
-
-  function resetTimer() {
-    if (currentInterval) {
-      $interval.cancel(currentInterval);
-      currentInterval = null;
-    }
-  }
-
-  function timerFn() {
-    var interval = +$scope.interval;
-    if (isPlaying && !isNaN(interval) && interval > 0 && slides.length) {
-      $scope.next(true);
-    } else {
-      $scope.pause();
-    }
-  }
-
-  $scope.play = function() {
-    if (!isPlaying) {
-      isPlaying = true;
-      restartTimer();
-    }
-  };
-  $scope.pause = function() {
-    if (!$scope.noPause) {
-      isPlaying = false;
-      resetTimer();
-    }
-  };
-
-  self.addSlide = function(slide, element) {
-    slide.$element = element;
-    slides.push(slide);
-    //if this is the first slide or the slide is set to active, select it
-    if(slides.length === 1 || slide.active) {
-      self.select(slides[slides.length-1]);
-      if (slides.length == 1) {
-        $scope.play();
-      }
-    } else {
-      slide.active = false;
-    }
-  };
-
-  self.removeSlide = function(slide) {
-    if (angular.isDefined(slide.index)) {
-      slides.sort(function(a, b) {
-        return +a.index > +b.index;
-      });
-    }
-    //get the index of the slide inside the carousel
-    var index = slides.indexOf(slide);
-    slides.splice(index, 1);
-    if (slides.length > 0 && slide.active) {
-      if (index >= slides.length) {
-        self.select(slides[index-1]);
-      } else {
-        self.select(slides[index]);
-      }
-    } else if (currentIndex > index) {
-      currentIndex--;
-    }
-
-    //clean the currentSlide when no more slide
-    if (slides.length === 0) {
-      self.currentSlide = null;
-    }
-  };
-
-  $scope.$watch('noTransition', function(noTransition) {
-    $element.data(NO_TRANSITION, noTransition);
-  });
-
-}])
-
+angular.module('ui.bootstrap.stackedMap', [])
 /**
- * @ngdoc directive
- * @name ui.bootstrap.carousel.directive:carousel
- * @restrict EA
- *
- * @description
- * Carousel is the outer container for a set of image 'slides' to showcase.
- *
- * @param {number=} interval The time, in milliseconds, that it will take the carousel to go to the next slide.
- * @param {boolean=} noTransition Whether to disable transitions on the carousel.
- * @param {boolean=} noPause Whether to disable pausing on the carousel (by default, the carousel interval pauses on hover).
- *
- * @example
-<example module="ui.bootstrap">
-  <file name="index.html">
-    <carousel>
-      <slide>
-        <img src="http://placekitten.com/150/150" style="margin:auto;">
-        <div class="carousel-caption">
-          <p>Beautiful!</p>
-        </div>
-      </slide>
-      <slide>
-        <img src="http://placekitten.com/100/150" style="margin:auto;">
-        <div class="carousel-caption">
-          <p>D'aww!</p>
-        </div>
-      </slide>
-    </carousel>
-  </file>
-  <file name="demo.css">
-    .carousel-indicators {
-      top: auto;
-      bottom: 15px;
-    }
-  </file>
-</example>
+ * A helper, internal data structure that acts as a map but also allows getting / removing
+ * elements in the LIFO order
  */
-.directive('carousel', [function() {
-  return {
-    restrict: 'EA',
-    transclude: true,
-    replace: true,
-    controller: 'CarouselController',
-    controllerAs: 'carousel',
-    require: 'carousel',
-    templateUrl: function(element, attrs) {
-      return attrs.templateUrl || 'template/carousel/carousel.html';
-    },
-    scope: {
-      interval: '=',
-      noTransition: '=',
-      noPause: '=',
-      noWrap: '&'
-    }
-  };
-}])
+  .factory('$$stackedMap', function() {
+    return {
+      createNew: function() {
+        var stack = [];
 
-/**
- * @ngdoc directive
- * @name ui.bootstrap.carousel.directive:slide
- * @restrict EA
- *
- * @description
- * Creates a slide inside a {@link ui.bootstrap.carousel.directive:carousel carousel}.  Must be placed as a child of a carousel element.
- *
- * @param {boolean=} active Model binding, whether or not this slide is currently active.
- * @param {number=} index The index of the slide. The slides will be sorted by this parameter.
- *
- * @example
-<example module="ui.bootstrap">
-  <file name="index.html">
-<div ng-controller="CarouselDemoCtrl">
-  <carousel>
-    <slide ng-repeat="slide in slides" active="slide.active" index="$index">
-      <img ng-src="{{slide.image}}" style="margin:auto;">
-      <div class="carousel-caption">
-        <h4>Slide {{$index}}</h4>
-        <p>{{slide.text}}</p>
-      </div>
-    </slide>
-  </carousel>
-  Interval, in milliseconds: <input type="number" ng-model="myInterval">
-  <br />Enter a negative number to stop the interval.
-</div>
-  </file>
-  <file name="script.js">
-function CarouselDemoCtrl($scope) {
-  $scope.myInterval = 5000;
-}
-  </file>
-  <file name="demo.css">
-    .carousel-indicators {
-      top: auto;
-      bottom: 15px;
-    }
-  </file>
-</example>
-*/
-
-.directive('slide', function() {
-  return {
-    require: '^carousel',
-    restrict: 'EA',
-    transclude: true,
-    replace: true,
-    templateUrl: function(element, attrs) {
-      return attrs.templateUrl || 'template/carousel/slide.html';
-    },
-    scope: {
-      active: '=?',
-      index: '=?'
-    },
-    link: function (scope, element, attrs, carouselCtrl) {
-      carouselCtrl.addSlide(scope, element);
-      //when the scope is destroyed then remove the slide from the current slides array
-      scope.$on('$destroy', function() {
-        carouselCtrl.removeSlide(scope);
-      });
-
-      scope.$watch('active', function(active) {
-        if (active) {
-          carouselCtrl.select(scope);
-        }
-      });
-    }
-  };
-})
-
-.animation('.item', [
-         '$injector', '$animate',
-function ($injector, $animate) {
-  var NO_TRANSITION = 'uib-noTransition',
-    SLIDE_DIRECTION = 'uib-slideDirection',
-    $animateCss = null;
-
-  if ($injector.has('$animateCss')) {
-    $animateCss = $injector.get('$animateCss');
-  }
-
-  function removeClass(element, className, callback) {
-    element.removeClass(className);
-    if (callback) {
-      callback();
-    }
-  }
-
-  return {
-    beforeAddClass: function (element, className, done) {
-      // Due to transclusion, noTransition property is on parent's scope
-      if (className == 'active' && element.parent() &&
-          !element.parent().data(NO_TRANSITION)) {
-        var stopped = false;
-        var direction = element.data(SLIDE_DIRECTION);
-        var directionClass = direction == 'next' ? 'left' : 'right';
-        var removeClassFn = removeClass.bind(this, element,
-          directionClass + ' ' + direction, done);
-        element.addClass(direction);
-
-        if ($animateCss) {
-          $animateCss(element, {addClass: directionClass})
-            .start()
-            .done(removeClassFn);
-        } else {
-          $animate.addClass(element, directionClass).then(function () {
-            if (!stopped) {
-              removeClassFn();
+        return {
+          add: function(key, value) {
+            stack.push({
+              key: key,
+              value: value
+            });
+          },
+          get: function(key) {
+            for (var i = 0; i < stack.length; i++) {
+              if (key == stack[i].key) {
+                return stack[i];
+              }
             }
-            done();
-          });
-        }
-
-        return function () {
-          stopped = true;
+          },
+          keys: function() {
+            var keys = [];
+            for (var i = 0; i < stack.length; i++) {
+              keys.push(stack[i].key);
+            }
+            return keys;
+          },
+          top: function() {
+            return stack[stack.length - 1];
+          },
+          remove: function(key) {
+            var idx = -1;
+            for (var i = 0; i < stack.length; i++) {
+              if (key == stack[i].key) {
+                idx = i;
+                break;
+              }
+            }
+            return stack.splice(idx, 1)[0];
+          },
+          removeTop: function() {
+            return stack.splice(stack.length - 1, 1)[0];
+          },
+          length: function() {
+            return stack.length;
+          }
         };
       }
-      done();
-    },
-    beforeRemoveClass: function (element, className, done) {
-      // Due to transclusion, noTransition property is on parent's scope
-      if (className === 'active' && element.parent() &&
-          !element.parent().data(NO_TRANSITION)) {
-        var stopped = false;
-        var direction = element.data(SLIDE_DIRECTION);
-        var directionClass = direction == 'next' ? 'left' : 'right';
-        var removeClassFn = removeClass.bind(this, element, directionClass, done);
-
-        if ($animateCss) {
-          $animateCss(element, {addClass: directionClass})
-            .start()
-            .done(removeClassFn);
-        } else {
-          $animate.addClass(element, directionClass).then(function () {
-            if (!stopped) {
-              removeClassFn();
-            }
-            done();
-          });
-        }
-        return function () {
-          stopped = true;
-        };
-      }
-      done();
-    }
-  };
-
-}])
-
-
-;
-!angular.$$csp() && angular.element(document).find('head').prepend('<style type="text/css">.ng-animate.item:not(.left):not(.right){-webkit-transition:0s ease-in-out left;transition:0s ease-in-out left}</style>');
+    };
+  });
